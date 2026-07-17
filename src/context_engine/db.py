@@ -1589,7 +1589,36 @@ def update_scan_stats(source: str, processed: int, added: int, updated: int,
     return {"status": "ok", "source": source}
 
 
-def get_action_items(status: str | None = "extracted", owner: str | None = None,
+def add_action_item(title: str, owner: str | None = None, due_date: str | None = None,
+                    priority: str = "medium", notes: str | None = None,
+                    project_id: int | None = None, source_interaction_id: int | None = None,
+                    domain: str = "work", db_path: str | None = None) -> dict:
+    """Create a new action item (task).
+
+    Resolves `owner` (a person's name) to owner_id when a matching person exists;
+    otherwise keeps it as free-text owner_name. New items start with status 'open'.
+    """
+    data: dict = {"title": title, "status": "open", "priority": priority, "domain": domain}
+    if due_date:
+        data["due_date"] = due_date
+    if notes:
+        data["notes"] = notes
+    if project_id:
+        data["related_project_id"] = project_id
+    if source_interaction_id:
+        data["source_interaction_id"] = source_interaction_id
+    if owner:
+        with get_db(db_path) as db:
+            person, _ = _find_person_smart(db, owner)
+        if person:
+            data["owner_id"] = person["id"]
+            data["owner_name"] = person["name"]
+        else:
+            data["owner_name"] = owner
+    return add_record("action_items", data, db_path)
+
+
+def get_action_items(status: str | None = "open", owner: str | None = None,
                      project_id: int | None = None, db_path: str | None = None) -> dict:
     """List action items with optional filters."""
     with get_db(db_path) as db:
@@ -1609,15 +1638,12 @@ def get_action_items(status: str | None = "extracted", owner: str | None = None,
         return {"total": len(rows), "action_items": [dict(r) for r in rows]}
 
 
-def mark_action_item_pushed(item_id: int, asana_task_id: str | None = None, db_path: str | None = None) -> dict:
-    """Mark an action item as pushed to Asana."""
+def mark_action_item_done(item_id: int, db_path: str | None = None) -> dict:
+    """Mark an action item as done (sets status='done' and completed_at)."""
     now = datetime.now().isoformat()
     with get_db(db_path) as db:
-        if asana_task_id:
-            db.execute("UPDATE action_items SET status = 'pushed_to_asana', asana_task_id = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-                       (asana_task_id, now, now, item_id))
-        else:
-            db.execute("UPDATE action_items SET status = 'pushed_to_asana', completed_at = ?, updated_at = ? WHERE id = ?", (now, now, item_id))
+        db.execute("UPDATE action_items SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?",
+                   (now, now, item_id))
         item = db.execute("SELECT * FROM action_items WHERE id = ?", (item_id,)).fetchone()
         if item:
             return {"status": "ok", "action_item": dict(item)}

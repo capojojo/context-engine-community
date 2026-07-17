@@ -642,20 +642,39 @@ def ctx_update_scan(source: str, processed: int, added: int, updated: int, notes
 # --- Action items ---
 
 @mcp.tool()
+def ctx_add_action_item(
+    title: str,
+    owner: str | None = None,
+    due_date: str | None = None,
+    priority: str = "medium",
+    notes: str | None = None,
+    project_id: int | None = None,
+    source_interaction_id: int | None = None,
+    domain: str = "work",
+) -> dict:
+    """Zaloz novy action item (ulohu).
+    title: co treba urobit (povinne). owner: meno zodpovednej osoby (napari sa na osobu ak existuje).
+    due_date: termin YYYY-MM-DD. priority: high/medium/low. project_id: napojenie na projekt.
+    source_interaction_id: z ktoreho meetingu/hovoru vzislo. Novy item ma status 'open'."""
+    return db.add_action_item(title, owner, due_date, priority, notes,
+                              project_id, source_interaction_id, domain)
+
+
+@mcp.tool()
 def ctx_action_items(
-    status: str | None = "extracted",
+    status: str | None = "open",
     owner: str | None = None,
     project_id: int | None = None,
 ) -> dict:
-    """Zoznam action itemov z meetingov/interakcii.
-    status: extracted/pushed_to_asana/done. owner: meno osoby. project_id: filter podla projektu."""
+    """Zoznam action itemov (uloh).
+    status: open/done (None = vsetky). owner: meno osoby. project_id: filter podla projektu."""
     return db.get_action_items(status, owner, project_id)
 
 
 @mcp.tool()
-def ctx_mark_action_done(item_id: int, asana_task_id: str | None = None) -> dict:
-    """Oznac action item ako pushed do Asany alebo done."""
-    return db.mark_action_item_pushed(item_id, asana_task_id)
+def ctx_mark_action_done(item_id: int) -> dict:
+    """Oznac action item ako hotovy (status='done')."""
+    return db.mark_action_item_done(item_id)
 
 
 # --- Decisions ---
