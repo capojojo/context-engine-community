@@ -62,7 +62,8 @@ VALID_COLUMNS = {
                      "details", "topics", "key_points", "sentiment", "follow_up",
                      "duration_minutes", "context", "date", "source_ref", "domain"},
     "notes": {"title", "content", "domain", "category", "tags",
-              "related_person_id", "related_project_id", "source", "status", "updated_at"},
+              "related_person_id", "related_project_id", "source", "status", "updated_at",
+              "due_date", "remind_at", "assignee_name", "assignee_id", "channel"},
     "action_items": {"title", "owner_name", "owner_id", "source_interaction_id",
                      "related_project_id", "due_date", "status", "priority", "notes",
                      "domain", "completed_at", "asana_task_id", "updated_at"},
@@ -199,6 +200,11 @@ CREATE TABLE IF NOT EXISTS notes (
     related_project_id INTEGER REFERENCES projects(id),
     source TEXT,
     status TEXT DEFAULT 'active',
+    due_date TEXT,
+    remind_at TEXT,
+    assignee_name TEXT,
+    assignee_id INTEGER REFERENCES people(id),
+    channel TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -490,6 +496,20 @@ def _migrate(db) -> None:
     ]:
         if col not in int_cols:
             db.execute(f"ALTER TABLE interactions ADD COLUMN {col} {coltype}")
+
+    # Migration: task fields on notes (added 2026-07-17) — for the proactive assistant
+    # Todos live as notes(category='todo'); these give them a deadline, reminder,
+    # delegation target and channel so the assistant can plan and follow up.
+    note_cols = {row[1] for row in db.execute("PRAGMA table_info(notes)").fetchall()}
+    for col, coltype in [
+        ("due_date", "TEXT"),        # dokedy — YYYY-MM-DD
+        ("remind_at", "TEXT"),       # kedy pripomenut — YYYY-MM-DD
+        ("assignee_name", "TEXT"),   # komu delegovane
+        ("assignee_id", "INTEGER"),  # link na people
+        ("channel", "TEXT"),         # email / whatsapp
+    ]:
+        if col not in note_cols:
+            db.execute(f"ALTER TABLE notes ADD COLUMN {col} {coltype}")
 
     # Rebuild FTS indexes after migration (companies + interactions)
     try:
@@ -1042,6 +1062,15 @@ def _detect_mentioned_people(db, content: str, limit: int = 5) -> list[int]:
     return matched
 
 
+def _looks_like_date(s: str) -> bool:
+    """True ak reťazec vyzerá ako YYYY-MM-DD."""
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _validate_and_enrich_note(data: dict, db) -> tuple[dict, list[str], list[str]]:
     """Validuje + obohatí note dáta. Vracia (clean_data, warnings, errors)."""
     warnings: list[str] = []
@@ -1101,6 +1130,21 @@ def _validate_and_enrich_note(data: dict, db) -> tuple[dict, list[str], list[str
                 warnings.append(f"auto-linked to person {mentioned[0]}; also mentions: {mentioned[1:]}")
             else:
                 warnings.append(f"auto-linked to person {mentioned[0]}")
+
+    # 3. Task fields (assistant): resolve assignee name → id, validate channel/dates
+    if data.get("assignee_name") and not data.get("assignee_id"):
+        person, _ = _find_person_smart(db, data["assignee_name"])
+        if person:
+            data["assignee_id"] = person["id"]
+            data["assignee_name"] = person["name"]
+        else:
+            warnings.append(f"assignee '{data['assignee_name']}' nenájdený v ľuďoch — uložený ako text")
+    if data.get("channel") and data["channel"] not in {"email", "whatsapp"}:
+        warnings.append(f"channel '{data['channel']}' nie je email/whatsapp — uložené ako je")
+    for f in ("due_date", "remind_at"):
+        v = data.get(f)
+        if v and not _looks_like_date(v):
+            warnings.append(f"{f} '{v}' nevyzerá ako dátum YYYY-MM-DD")
 
     return data, warnings, errors
 
@@ -1427,6 +1471,56 @@ def get_note(note_id: int, db_path: str | None = None) -> dict:
         if note:
             return dict(note)
         return {"error": f"Note not found: {note_id}"}
+
+
+def get_agenda(reference_date: str | None = None, domain: str | None = None,
+               db_path: str | None = None) -> dict:
+    """Agenda pre asistentku — 'čo mi treba dnes'.
+
+    Úlohy = notes s category='todo' a status='active'. Roztriedi ich podľa termínu:
+      overdue    — po termíne (due_date < dnes)
+      due_today  — na dnes (due_date == dnes, alebo remind_at <= dnes)
+      upcoming   — s termínom neskôr (due_date > dnes)
+      someday    — bez termínu aj bez pripomienky
+    `reference_date` (YYYY-MM-DD) prepíše 'dnes' — hlavne pre testy.
+    """
+    today = reference_date or datetime.now().strftime("%Y-%m-%d")
+    with get_db(db_path) as db:
+        sql = "SELECT * FROM notes WHERE category = 'todo' AND status = 'active'"
+        params: list = []
+        if domain:
+            sql += " AND domain = ?"
+            params.append(domain)
+        rows = [dict(r) for r in db.execute(sql, params).fetchall()]
+
+    overdue, due_today, upcoming, someday = [], [], [], []
+    for r in rows:
+        due = r.get("due_date")
+        remind = r.get("remind_at")
+        if due and due < today:
+            overdue.append(r)
+        elif (due and due == today) or (remind and remind <= today):
+            due_today.append(r)
+        elif due and due > today:
+            upcoming.append(r)
+        else:
+            someday.append(r)
+
+    for bucket in (overdue, due_today, upcoming):
+        bucket.sort(key=lambda r: r.get("due_date") or r.get("remind_at") or "9999")
+
+    return {
+        "today": today,
+        "counts": {
+            "overdue": len(overdue), "due_today": len(due_today),
+            "upcoming": len(upcoming), "someday": len(someday),
+            "total_open": len(rows),
+        },
+        "overdue": overdue,
+        "due_today": due_today,
+        "upcoming": upcoming,
+        "someday": someday,
+    }
 
 
 def stats(domain: str | None = None, db_path: str | None = None) -> dict:

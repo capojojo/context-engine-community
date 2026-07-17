@@ -197,6 +197,10 @@ class NoteInput(BaseModel):
     related_project_id: Optional[int] = None
     source: Optional[str] = None
     status: Optional[str] = Field(default="active")
+    due_date: Optional[str] = Field(default=None, description="Dokedy — YYYY-MM-DD (hlavne pre category='todo')")
+    remind_at: Optional[str] = Field(default=None, description="Kedy pripomenut — YYYY-MM-DD")
+    assignee_name: Optional[str] = Field(default=None, description="Komu je uloha delegovana (meno osoby)")
+    channel: Optional[str] = Field(default=None, description="Kanal na delegovanie: email / whatsapp")
 
 
 class UpdateInput(BaseModel):

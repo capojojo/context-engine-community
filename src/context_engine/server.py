@@ -274,6 +274,10 @@ def ctx_add_note(
     related_person_id: int | None = None,
     related_project_id: int | None = None,
     status: str = "active",
+    due_date: str | None = None,
+    remind_at: str | None = None,
+    assignee_name: str | None = None,
+    channel: str | None = None,
     skip_dedupe_check: bool = False,
 ) -> dict:
     """Pridaj poznámku do znalostnej bázy. POVINNÉ POLIA: title, content, domain, category, tags, source.
@@ -302,6 +306,10 @@ def ctx_add_note(
     related_person_id / related_project_id — ak vieš osobu/projekt, prepoj.
       Ak sa meno osoby spomína v content, link sa pridá automaticky.
 
+    due_date / remind_at — pre úlohy (category='todo'): dokedy to treba a kedy pripomenúť (YYYY-MM-DD).
+    assignee_name — komu je úloha delegovaná (meno osoby; napári sa na osobu ak existuje).
+    channel — kanál na delegovanie: 'email' alebo 'whatsapp'.
+
     skip_dedupe_check — ak True, neskontroluje existujúce podobné notes (default False).
 
     VRACIA:
@@ -313,6 +321,7 @@ def ctx_add_note(
         title=title, content=content, domain=domain, category=category,
         tags=tags, related_person_id=related_person_id,
         related_project_id=related_project_id, source=source, status=status,
+        due_date=due_date, remind_at=remind_at, assignee_name=assignee_name, channel=channel,
     )
     return db.add_note(data.model_dump(exclude_none=True), skip_dedupe_check=skip_dedupe_check)
 
@@ -325,6 +334,15 @@ def ctx_find_notes(
 ) -> dict:
     """Hladaj v poznnamkach/znalostnej baze. Volitelne filtruj podla domeny a kategorie."""
     return db.find_notes(query, domain, category)
+
+
+@mcp.tool()
+def ctx_agenda(reference_date: str | None = None, domain: str | None = None) -> dict:
+    """Agenda 'co mi treba dnes' — otvorene ulohy (notes category='todo') roztriedene podla terminu.
+    Vracia kosiky: overdue (po termine), due_today (na dnes), upcoming (neskor), someday (bez terminu)
+    + counts. reference_date (YYYY-MM-DD) prepise 'dnes'. domain filter volitelny.
+    Pouzi na ranny plan a follow-up: co je po termine a co treba dnes."""
+    return db.get_agenda(reference_date, domain)
 
 
 # --- Update ---
