@@ -406,6 +406,25 @@ def ctx_log(
     return db.log_interaction(data.model_dump(exclude_none=True))
 
 
+@mcp.tool()
+def ctx_delegate(
+    person: str,
+    task: str,
+    channel: str | None = None,
+    follow_up_date: str | None = None,
+    project_id: int | None = None,
+    domain: str = "work",
+) -> dict:
+    """Zaznamenaj delegovanie + AUTOMATICKY vytvor follow-up todo (uzatvara slucku 'ako to dopadlo').
+    VOLAJ AZ PO odoslani spravy — nic neodosiela, len zapisuje.
+    person: komu si delegoval (meno; napari sa na osobu ak existuje).
+    task: co ma dana osoba spravit.
+    channel: email / whatsapp (ako to bolo delegovane).
+    follow_up_date: kedy pripomenut kontrolu (YYYY-MM-DD).
+    Vrati interaction_id (zaznam delegovania) a follow_up_todo_id (pripomienka na kontrolu)."""
+    return db.log_delegation(person, task, channel, follow_up_date, project_id, domain)
+
+
 # --- Advanced search (Layer 4) ---
 
 @mcp.tool()

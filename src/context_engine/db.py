@@ -1371,6 +1371,72 @@ def log_interaction(data: dict, db_path: str | None = None) -> dict:
     return result
 
 
+def log_delegation(person: str, task: str, channel: str | None = None,
+                   follow_up_date: str | None = None, project_id: int | None = None,
+                   domain: str = "work", db_path: str | None = None) -> dict:
+    """Record a delegation AND auto-create a follow-up todo — closes the loop.
+
+    Call AFTER the message was actually sent (this sends nothing). It:
+      1) logs an outgoing interaction ('Delegované <person>: <task>'), and
+      2) creates a follow-up todo due on `follow_up_date` so the assistant can
+         later ask whether <person> did it.
+    Resolves the person's name to an id where a matching person exists.
+    """
+    channel = channel or "whatsapp"
+    person_id = None
+    person_name = person
+    with get_db(db_path) as db:
+        p, _ = _find_person_smart(db, person)
+        if p:
+            person_id = p["id"]
+            person_name = p["name"]
+
+    now_date = datetime.now().strftime("%Y-%m-%d")
+
+    # 1) log the delegation as an outgoing interaction
+    interaction = {
+        "person_id": person_id,
+        "person_name": person_name,
+        "channel": channel,
+        "direction": "outgoing",
+        "summary": f"Delegované: {task}",
+        "details": f"Delegované {person_name} cez {channel}: {task}",
+        "follow_up": f"Overiť či {person_name} spravil(a): {task}",
+        "date": now_date,
+        "domain": domain,
+    }
+    int_res = log_interaction(interaction, db_path)
+
+    # 2) create the follow-up todo (with deadline if given)
+    note = {
+        "title": f"Skontrolovať: {person_name} — {task}",
+        "content": (f"Follow-up na delegovanú úlohu. Delegované {person_name} cez "
+                    f"{channel}: {task}. Overiť, či to spravil(a)."),
+        "domain": domain,
+        "category": "todo",
+        "tags": json.dumps([now_date, "delegovanie", "follow-up"], ensure_ascii=False),
+        "source": "delegation",
+        "related_person_id": person_id,
+        "related_project_id": project_id,
+        "channel": channel,
+    }
+    if follow_up_date:
+        note["due_date"] = follow_up_date
+        note["remind_at"] = follow_up_date
+    note_res = add_note(note, db_path, skip_dedupe_check=True)
+
+    return {
+        "status": "ok",
+        "delegated_to": person_name,
+        "person_id": person_id,
+        "task": task,
+        "channel": channel,
+        "follow_up_date": follow_up_date,
+        "interaction_id": int_res.get("id"),
+        "follow_up_todo_id": note_res.get("id"),
+    }
+
+
 def _find_similar_notes(db, title: str, content: str, limit: int = 3,
                         min_score: float = 0.5) -> list[dict]:
     """Nájde existujúce notes ktoré sú podobné novej (title+content prefix).
